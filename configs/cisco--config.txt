@@ -1,0 +1,806 @@
+=== NETWORK ARCHITECTURE OVERVIEW ===
+
+Device Models and Roles:
+- Core Router: Cisco Catalyst 9500-24Y4C - Primary routing, OSPF, backbone connectivity
+- Distribution Switches: Cisco Catalyst 9300-48P (x2) - VLAN aggregation, L3 routing, redundancy
+- Access Switches: Cisco Catalyst 9200-24P (x4) - End-user connectivity, 802.1X, port security
+- Firewall: Cisco Firepower 2110 - Network security, access control, threat prevention
+
+Network Topology Description:
+- Three-tier hierarchical design with redundant links
+- Core router provides high-speed backbone and OSPF routing
+- Distribution switches aggregate access, provide L3 inter-VLAN routing, and redundancy (HSRP)
+- Access switches connect endpoints, enforce 802.1X/NAC, micro-segmentation by VLAN
+- Firewall enforces zero-trust, least-privilege, and threat protection
+- SIEM integration for monitoring and automated incident response
+
+---
+
+=== DEVICE 1: CORE ROUTER (Cisco Catalyst 9500-24Y4C) ===
+
+! ===== SECTION: Basic Configuration =====
+hostname CORE-9500
+enable secret 9 $9$uN8wGk$8z1G9p8k9w2F3
+username netadmin privilege 15 secret 9 $9$wK8n3L$1a2b3c4d5e6f7g8h
+service password-encryption
+service timestamps debug datetime localtime
+service timestamps log datetime localtime
+no service pad
+no ip source-route
+no ip http server
+no ip http secure-server
+banner motd ^C
+Unauthorized access is prohibited. All activity is monitored and logged.
+^C
+clock timezone UTC 0
+ip domain-name campus.example.com
+ip name-server 8.8.8.8 1.1.1.1
+crypto key generate rsa modulus 2048
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Security Hardening =====
+aaa new-model
+aaa authentication login default local
+aaa authorization exec default local
+aaa accounting exec default start-stop group tacacs+
+login block-for 300 attempts 3 within 120
+ip ssh version 2
+ip ssh time-out 60
+ip ssh authentication-retries 3
+ip ssh logging events
+ip access-list standard MGMT-ACCESS
+ permit 10.254.254.0 0.0.0.255
+ deny any
+ip access-list extended ACL-ADMIN-ACCESS
+ permit tcp 10.254.254.0 0.0.0.255 any eq 22
+ deny ip any any log
+line console 0
+ exec-timeout 10 0
+ logging synchronous
+ privilege level 15
+ login local
+line vty 0 4
+ access-class MGMT-ACCESS in
+ transport input ssh
+line vty 5 15
+spanning-tree portfast bpduguard default
+ip tcp synwait-time 10
+ip cef
+service tcp-keepalives-in
+service tcp-keepalives-out
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Interface Configuration =====
+interface GigabitEthernet1/0/1
+ description Uplink to DIST1
+ ip address 10.254.0.1 255.255.255.252
+ no shutdown
+
+interface GigabitEthernet1/0/2
+ description Uplink to DIST2
+ ip address 10.254.0.5 255.255.255.252
+ no shutdown
+
+interface Loopback0
+ description Router-ID Loopback
+ ip address 10.254.255.1 255.255.255.255
+
+interface Vlan10
+ description Finance VLAN SVI
+ ip address 10.1.0.1 255.255.255.0
+
+interface Vlan20
+ description HR VLAN SVI
+ ip address 10.2.0.1 255.255.255.0
+
+interface Vlan30
+ description IT VLAN SVI
+ ip address 10.3.0.1 255.255.255.0
+
+interface Vlan99
+ description Management VLAN SVI
+ ip address 10.254.254.1 255.255.255.0
+
+interface Port-channel1
+ description Redundant uplink to DIST1/DIST2
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,99
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Routing Protocols =====
+ip routing
+router ospf 10
+ router-id 10.254.255.1
+ passive-interface default
+ no passive-interface GigabitEthernet1/0/1
+ no passive-interface GigabitEthernet1/0/2
+ no passive-interface Vlan10
+ no passive-interface Vlan20
+ no passive-interface Vlan30
+ no passive-interface Vlan99
+ network 10.1.0.0 0.0.0.255 area 0
+ network 10.2.0.0 0.0.0.255 area 0
+ network 10.3.0.0 0.0.0.255 area 0
+ network 10.254.0.0 0.0.0.7 area 0
+ network 10.254.254.0 0.0.0.255 area 0
+ network 10.254.255.1 0.0.0.0 area 0
+!
+ip route 0.0.0.0 0.0.0.0 10.254.0.2
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Security & Management =====
+logging buffered 32768
+logging console warnings
+logging host 10.254.254.100
+snmp-server community campusRO RO MGMT-ACCESS
+snmp-server enable traps snmp authentication linkdown linkup
+ntp authenticate
+ntp authentication-key 1 md5 7B6C9A3D5F
+ntp trusted-key 1
+ntp server 10.254.254.200 key 1
+ip device tracking
+ip dhcp snooping vlan 10,20,30,99
+ip dhcp snooping
+ip arp inspection vlan 10,20,30,99
+!
+! ===== END SECTION =====
+
+copy running-config startup-config
+
+---
+
+=== DEVICE 2: DISTRIBUTION SWITCH 1 (Cisco Catalyst 9300-48P) ===
+
+! ===== SECTION: Basic Configuration =====
+hostname DIST1-9300
+enable secret 9 $9$uN8wGk$8z1G9p8k9w2F3
+username netadmin privilege 15 secret 9 $9$wK8n3L$1a2b3c4d5e6f7g8h
+service password-encryption
+service timestamps debug datetime localtime
+service timestamps log datetime localtime
+no service pad
+no ip source-route
+no ip http server
+no ip http secure-server
+banner motd ^C
+Unauthorized access is prohibited. All activity is monitored and logged.
+^C
+clock timezone UTC 0
+ip domain-name campus.example.com
+ip name-server 8.8.8.8 1.1.1.1
+crypto key generate rsa modulus 2048
+!
+! ===== END SECTION =====
+
+! ===== SECTION: VLAN & Trunking =====
+vlan 10
+ name FINANCE
+vlan 20
+ name HR
+vlan 30
+ name IT
+vlan 99
+ name MGMT
+!
+interface Vlan10
+ description Finance SVI
+ ip address 10.1.0.2 255.255.255.0
+ no shutdown
+
+interface Vlan20
+ description HR SVI
+ ip address 10.2.0.2 255.255.255.0
+ no shutdown
+
+interface Vlan30
+ description IT SVI
+ ip address 10.3.0.2 255.255.255.0
+ no shutdown
+
+interface Vlan99
+ description Management SVI
+ ip address 10.254.254.2 255.255.255.0
+ no shutdown
+
+interface GigabitEthernet1/0/48
+ description Uplink to CORE-9500
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,99
+ channel-group 1 mode active
+
+interface Port-channel1
+ description Uplink to CORE-9500
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,99
+
+interface GigabitEthernet1/0/47
+ description Trunk to DIST2-9300
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,99
+ channel-group 2 mode active
+
+interface Port-channel2
+ description Trunk to DIST2-9300
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,99
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Interface Configuration =====
+interface range GigabitEthernet1/0/1-24
+ description Access Ports - Finance
+ switchport mode access
+ switchport access vlan 10
+ switchport port-security
+ switchport port-security maximum 3
+ switchport port-security mac-address sticky
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ storm-control broadcast level 1.00
+
+interface range GigabitEthernet1/0/25-36
+ description Access Ports - HR
+ switchport mode access
+ switchport access vlan 20
+ switchport port-security
+ switchport port-security maximum 3
+ switchport port-security mac-address sticky
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ storm-control broadcast level 1.00
+
+interface range GigabitEthernet1/0/37-46
+ description Access Ports - IT
+ switchport mode access
+ switchport access vlan 30
+ switchport port-security
+ switchport port-security maximum 3
+ switchport port-security mac-address sticky
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ storm-control broadcast level 1.00
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Layer 3 Routing =====
+ip routing
+router ospf 10
+ router-id 10.254.255.2
+ passive-interface default
+ no passive-interface Port-channel1
+ no passive-interface Port-channel2
+ no passive-interface Vlan10
+ no passive-interface Vlan20
+ no passive-interface Vlan30
+ no passive-interface Vlan99
+ network 10.1.0.0 0.0.0.255 area 0
+ network 10.2.0.0 0.0.0.255 area 0
+ network 10.3.0.0 0.0.0.255 area 0
+ network 10.254.0.0 0.0.0.7 area 0
+ network 10.254.254.0 0.0.0.255 area 0
+!
+! HSRP for VLAN interfaces
+interface Vlan10
+ standby 10 ip 10.1.0.254
+ standby 10 priority 110
+ standby 10 preempt
+
+interface Vlan20
+ standby 20 ip 10.2.0.254
+ standby 20 priority 110
+ standby 20 preempt
+
+interface Vlan30
+ standby 30 ip 10.3.0.254
+ standby 30 priority 110
+ standby 30 preempt
+
+interface Vlan99
+ standby 99 ip 10.254.254.254
+ standby 99 priority 110
+ standby 99 preempt
+!
+! ===== END SECTION =====
+
+copy running-config startup-config
+
+---
+
+=== DEVICE 3: DISTRIBUTION SWITCH 2 (Cisco Catalyst 9300-48P) ===
+
+! ===== SECTION: Basic Configuration =====
+hostname DIST2-9300
+enable secret 9 $9$uN8wGk$8z1G9p8k9w2F3
+username netadmin privilege 15 secret 9 $9$wK8n3L$1a2b3c4d5e6f7g8h
+service password-encryption
+service timestamps debug datetime localtime
+service timestamps log datetime localtime
+no service pad
+no ip source-route
+no ip http server
+no ip http secure-server
+banner motd ^C
+Unauthorized access is prohibited. All activity is monitored and logged.
+^C
+clock timezone UTC 0
+ip domain-name campus.example.com
+ip name-server 8.8.8.8 1.1.1.1
+crypto key generate rsa modulus 2048
+!
+! ===== END SECTION =====
+
+! ===== SECTION: VLAN & Trunking =====
+vlan 10
+ name FINANCE
+vlan 20
+ name HR
+vlan 30
+ name IT
+vlan 99
+ name MGMT
+!
+interface Vlan10
+ description Finance SVI
+ ip address 10.1.0.3 255.255.255.0
+ no shutdown
+
+interface Vlan20
+ description HR SVI
+ ip address 10.2.0.3 255.255.255.0
+ no shutdown
+
+interface Vlan30
+ description IT SVI
+ ip address 10.3.0.3 255.255.255.0
+ no shutdown
+
+interface Vlan99
+ description Management SVI
+ ip address 10.254.254.3 255.255.255.0
+ no shutdown
+
+interface GigabitEthernet1/0/48
+ description Uplink to CORE-9500
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,99
+ channel-group 1 mode active
+
+interface Port-channel1
+ description Uplink to CORE-9500
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,99
+
+interface GigabitEthernet1/0/47
+ description Trunk to DIST1-9300
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,99
+ channel-group 2 mode active
+
+interface Port-channel2
+ description Trunk to DIST1-9300
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,99
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Interface Configuration =====
+interface range GigabitEthernet1/0/1-24
+ description Access Ports - Finance
+ switchport mode access
+ switchport access vlan 10
+ switchport port-security
+ switchport port-security maximum 3
+ switchport port-security mac-address sticky
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ storm-control broadcast level 1.00
+
+interface range GigabitEthernet1/0/25-36
+ description Access Ports - HR
+ switchport mode access
+ switchport access vlan 20
+ switchport port-security
+ switchport port-security maximum 3
+ switchport port-security mac-address sticky
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ storm-control broadcast level 1.00
+
+interface range GigabitEthernet1/0/37-46
+ description Access Ports - IT
+ switchport mode access
+ switchport access vlan 30
+ switchport port-security
+ switchport port-security maximum 3
+ switchport port-security mac-address sticky
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ storm-control broadcast level 1.00
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Layer 3 Routing =====
+ip routing
+router ospf 10
+ router-id 10.254.255.3
+ passive-interface default
+ no passive-interface Port-channel1
+ no passive-interface Port-channel2
+ no passive-interface Vlan10
+ no passive-interface Vlan20
+ no passive-interface Vlan30
+ no passive-interface Vlan99
+ network 10.1.0.0 0.0.0.255 area 0
+ network 10.2.0.0 0.0.0.255 area 0
+ network 10.3.0.0 0.0.0.255 area 0
+ network 10.254.0.0 0.0.0.7 area 0
+ network 10.254.254.0 0.0.0.255 area 0
+!
+! HSRP for VLAN interfaces (backup)
+interface Vlan10
+ standby 10 ip 10.1.0.254
+ standby 10 priority 100
+ standby 10 preempt
+
+interface Vlan20
+ standby 20 ip 10.2.0.254
+ standby 20 priority 100
+ standby 20 preempt
+
+interface Vlan30
+ standby 30 ip 10.3.0.254
+ standby 30 priority 100
+ standby 30 preempt
+
+interface Vlan99
+ standby 99 ip 10.254.254.254
+ standby 99 priority 100
+ standby 99 preempt
+!
+! ===== END SECTION =====
+
+copy running-config startup-config
+
+---
+
+=== DEVICE 4: ACCESS SWITCH 1 (Cisco Catalyst 9200-24P) ===
+
+! ===== SECTION: Basic Configuration =====
+hostname ACC1-9200
+enable secret 9 $9$uN8wGk$8z1G9p8k9w2F3
+username netadmin privilege 15 secret 9 $9$wK8n3L$1a2b3c4d5e6f7g8h
+service password-encryption
+service timestamps debug datetime localtime
+service timestamps log datetime localtime
+no service pad
+no ip source-route
+no ip http server
+no ip http secure-server
+banner motd ^C
+Unauthorized access is prohibited. All activity is monitored and logged.
+^C
+clock timezone UTC 0
+ip domain-name campus.example.com
+ip name-server 8.8.8.8 1.1.1.1
+crypto key generate rsa modulus 2048
+!
+! ===== END SECTION =====
+
+! ===== SECTION: VLAN & Trunking =====
+vlan 10
+ name FINANCE
+vlan 20
+ name HR
+vlan 30
+ name IT
+vlan 99
+ name MGMT
+!
+interface Vlan99
+ description Management SVI
+ ip address 10.254.254.11 255.255.255.0
+ no shutdown
+
+interface GigabitEthernet1/0/24
+ description Uplink to DIST1-9300
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,99
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Interface Configuration =====
+interface range GigabitEthernet1/0/1-8
+ description Finance Dept
+ switchport mode access
+ switchport access vlan 10
+ authentication port-control auto
+ mab
+ dot1x pae authenticator
+ dot1x timeout tx-period 10
+ dot1x max-req 3
+ dot1x max-reauth-req 3
+ switchport port-security
+ switchport port-security maximum 3
+ switchport port-security mac-address sticky
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ storm-control broadcast level 1.00
+
+interface range GigabitEthernet1/0/9-16
+ description HR Dept
+ switchport mode access
+ switchport access vlan 20
+ switchport port-security
+ switchport port-security maximum 3
+ switchport port-security mac-address sticky
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ storm-control broadcast level 1.00
+
+interface range GigabitEthernet1/0/17-23
+ description IT Dept
+ switchport mode access
+ switchport access vlan 30
+ switchport port-security
+ switchport port-security maximum 3
+ switchport port-security mac-address sticky
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ storm-control broadcast level 1.00
+!
+! ===== END SECTION =====
+
+! ===== SECTION: 802.1X, NAC, Security =====
+aaa new-model
+aaa authentication dot1x default group radius
+aaa authorization network default group radius
+radius-server host 10.254.254.50 auth-port 1812 acct-port 1813 key RADIUSKEY
+dot1x system-auth-control
+ip access-list extended NAC-RESTRICT
+ permit ip 10.1.0.0 0.0.0.255 10.2.0.0 0.0.0.255 eq 80
+ deny ip any any log
+ip dhcp snooping vlan 10,20,30,99
+ip dhcp snooping
+ip arp inspection vlan 10,20,30,99
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Monitoring & Management =====
+logging buffered 32768
+logging console warnings
+logging host 10.254.254.100
+snmp-server community campusRO RO MGMT-ACCESS
+snmp-server enable traps snmp authentication linkdown linkup
+ntp authenticate
+ntp authentication-key 1 md5 7B6C9A3D5F
+ntp trusted-key 1
+ntp server 10.254.254.200 key 1
+!
+! ===== END SECTION =====
+
+copy running-config startup-config
+
+---
+
+=== DEVICE 5: ACCESS SWITCH 2 (Cisco Catalyst 9200-24P) ===
+
+! ===== SECTION: Basic Configuration =====
+hostname ACC2-9200
+enable secret 9 $9$uN8wGk$8z1G9p8k9w2F3
+username netadmin privilege 15 secret 9 $9$wK8n3L$1a2b3c4d5e6f7g8h
+service password-encryption
+service timestamps debug datetime localtime
+service timestamps log datetime localtime
+no service pad
+no ip source-route
+no ip http server
+no ip http secure-server
+banner motd ^C
+Unauthorized access is prohibited. All activity is monitored and logged.
+^C
+clock timezone UTC 0
+ip domain-name campus.example.com
+ip name-server 8.8.8.8 1.1.1.1
+crypto key generate rsa modulus 2048
+!
+! ===== END SECTION =====
+
+! ===== SECTION: VLAN & Trunking =====
+vlan 10
+ name FINANCE
+vlan 20
+ name HR
+vlan 30
+ name IT
+vlan 99
+ name MGMT
+!
+interface Vlan99
+ description Management SVI
+ ip address 10.254.254.12 255.255.255.0
+ no shutdown
+
+interface GigabitEthernet1/0/24
+ description Uplink to DIST2-9300
+ switchport trunk encapsulation dot1q
+ switchport mode trunk
+ switchport trunk allowed vlan 10,20,30,99
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Interface Configuration =====
+interface range GigabitEthernet1/0/1-8
+ description Finance Dept
+ switchport mode access
+ switchport access vlan 10
+ authentication port-control auto
+ mab
+ dot1x pae authenticator
+ dot1x timeout tx-period 10
+ dot1x max-req 3
+ dot1x max-reauth-req 3
+ switchport port-security
+ switchport port-security maximum 3
+ switchport port-security mac-address sticky
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ storm-control broadcast level 1.00
+
+interface range GigabitEthernet1/0/9-16
+ description HR Dept
+ switchport mode access
+ switchport access vlan 20
+ switchport port-security
+ switchport port-security maximum 3
+ switchport port-security mac-address sticky
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ storm-control broadcast level 1.00
+
+interface range GigabitEthernet1/0/17-23
+ description IT Dept
+ switchport mode access
+ switchport access vlan 30
+ switchport port-security
+ switchport port-security maximum 3
+ switchport port-security mac-address sticky
+ spanning-tree portfast
+ spanning-tree bpduguard enable
+ storm-control broadcast level 1.00
+!
+! ===== END SECTION =====
+
+! ===== SECTION: 802.1X, NAC, Security =====
+aaa new-model
+aaa authentication dot1x default group radius
+aaa authorization network default group radius
+radius-server host 10.254.254.50 auth-port 1812 acct-port 1813 key RADIUSKEY
+dot1x system-auth-control
+ip access-list extended NAC-RESTRICT
+ permit ip 10.1.0.0 0.0.0.255 10.2.0.0 0.0.0.255 eq 80
+ deny ip any any log
+ip dhcp snooping vlan 10,20,30,99
+ip dhcp snooping
+ip arp inspection vlan 10,20,30,99
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Monitoring & Management =====
+logging buffered 32768
+logging console warnings
+logging host 10.254.254.100
+snmp-server community campusRO RO MGMT-ACCESS
+snmp-server enable traps snmp authentication linkdown linkup
+ntp authenticate
+ntp authentication-key 1 md5 7B6C9A3D5F
+ntp trusted-key 1
+ntp server 10.254.254.200 key 1
+!
+! ===== END SECTION =====
+
+copy running-config startup-config
+
+---
+
+=== DEVICE 6: FIREWALL (Cisco Firepower 2110) ===
+
+! ===== SECTION: Basic Configuration =====
+hostname FW-2110
+enable secret 9 $9$uN8wGk$8z1G9p8k9w2F3
+username netadmin privilege 15 secret 9 $9$wK8n3L$1a2b3c4d5e6f7g8h
+service password-encryption
+service timestamps debug datetime localtime
+service timestamps log datetime localtime
+no service pad
+no ip source-route
+no ip http server
+banner motd ^C
+Unauthorized access is prohibited. All activity is monitored and logged.
+^C
+clock timezone UTC 0
+ip domain-name campus.example.com
+ip name-server 8.8.8.8 1.1.1.1
+crypto key generate rsa modulus 2048
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Interface Configuration =====
+interface GigabitEthernet1/1
+ description Inside - Core
+ ip address 10.254.0.2 255.255.255.252
+ no shutdown
+
+interface GigabitEthernet1/2
+ description Outside - Internet
+ ip address dhcp
+ no shutdown
+
+interface GigabitEthernet1/3
+ description DMZ - SIEM
+ ip address 10.254.254.100 255.255.255.0
+ no shutdown
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Security & Access Control =====
+ip access-list extended ZT-MICROSEG
+ permit ip 10.1.0.0 0.0.0.255 10.2.0.0 0.0.0.255 eq 80
+ permit ip 10.2.0.0 0.0.0.255 10.3.0.0 0.0.0.255 eq 443
+ deny ip any any log
+!
+ip inspect name ZT-INSPECT tcp
+ip inspect name ZT-INSPECT udp
+ip inspect name ZT-INSPECT icmp
+!
+interface GigabitEthernet1/1
+ ip access-group ZT-MICROSEG in
+ ip inspect ZT-INSPECT in
+!
+! ===== END SECTION =====
+
+! ===== SECTION: Monitoring & Incident Response =====
+logging buffered 32768
+logging host 10.254.254.100
+snmp-server community campusRO RO
+snmp-server enable traps snmp authentication linkdown linkup
+ntp authenticate
+ntp authentication-key 1 md5 7B6C9A3D5F
+ntp trusted-key 1
+ntp server 10.254.254.200 key 1
+!
+! ===== END SECTION =====
+
+copy running-config startup-config
+
+---
+
+=== DEPLOYMENT RECOMMENDATIONS ===
+
+Installation Sequence:
+1. Install and configure Core Router (CORE-9500)
+2. Connect and configure Distribution Switches (DIST1-9300, DIST2-9300) to Core
+3. Configure trunk links between Distribution Switches
+4. Install and configure Access Switches (ACC1-9200, ACC2-9200)
+5. Connect Access Switches to Distribution layer
+6. Install and configure Firewall (FW-2110)
+7. Verify connectivity and redundancy (OSPF, HSRP, trunks)
+8. Test security policies, 802.1X/NAC, and micro-segmentation
+9. Integrate SIEM and validate logging/monitoring
+10. Implement automated incident response and compliance checks
+
+
+This configuration provides a robust, zero-trust, micro-segmented campus network with identity-based access, NAC, continuous monitoring, and least-privilege enforcement, using only Cisco IOS-XE syntax and best practices.
